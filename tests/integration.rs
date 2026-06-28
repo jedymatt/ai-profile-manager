@@ -32,3 +32,23 @@ fn init_sets_up_gitignore_import_and_default_profile() {
     let claude_md2 = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
     assert_eq!(claude_md2.matches("@.claude/local.md").count(), 1);
 }
+
+#[test]
+fn new_creates_profile_and_list_shows_it() {
+    let tmp = tempdir().unwrap();
+    let repo = tmp.path();
+    let user = repo.join("user.json");
+
+    aipm(repo, &user).arg("init").assert().success();
+    aipm(repo, &user).args(["new", "focus"]).assert().success();
+    assert!(repo.join(".claude-profiles/focus").is_dir());
+
+    // duplicate is rejected
+    aipm(repo, &user).args(["new", "focus"]).assert().failure();
+
+    aipm(repo, &user)
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("focus"));
+}
