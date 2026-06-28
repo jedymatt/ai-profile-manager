@@ -142,6 +142,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+Design and implementation notes live in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+
 ### Cutting a release
 
 Releases are built and published by [`dist`](https://github.com/axodotdev/cargo-dist)
@@ -157,8 +159,6 @@ The `release.yml` workflow builds the per-platform binaries and publishes a GitH
 Release with the binaries, checksums, and the `aipm-installer.sh` / `aipm-installer.ps1`
 scripts. The workflow is generated — to change build targets or installers, edit the
 dist config and run `dist generate`, never hand-edit `.github/workflows/release.yml`.
-
-Design and implementation notes live in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
 
 ## License
 
