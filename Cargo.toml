@@ -2,6 +2,10 @@
 name = "aipm"
 version = "0.1.0"
 edition = "2021"
+description = "An OS- and shell-agnostic switcher for personal Claude Code configuration, kept in the repo, for teams."
+repository = "https://github.com/jedymatt/ai-profile-manager"
+license = "MIT"
+readme = "README.md"
 
 [[bin]]
 name = "aipm"
