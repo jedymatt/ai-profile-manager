@@ -40,6 +40,28 @@ Every part of a profile is optional. A profile that only sets a model contains j
 
 ## Install
 
+### Prebuilt binary (recommended)
+
+No Rust toolchain required. The installer downloads a binary for your platform
+from the latest [GitHub Release](https://github.com/jedymatt/ai-profile-manager/releases)
+and places it in `~/.local/bin`.
+
+**macOS / Linux:**
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jedymatt/ai-profile-manager/releases/latest/download/aipm-installer.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/jedymatt/ai-profile-manager/releases/latest/download/aipm-installer.ps1 | iex"
+```
+
+If `~/.local/bin` is not on your `PATH`, the installer prints how to add it.
+
+### From source
+
 Requires a [Rust toolchain](https://rustup.rs).
 
 ```bash
@@ -121,6 +143,22 @@ cargo fmt --all -- --check
 ```
 
 Design and implementation notes live in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+
+### Cutting a release
+
+Releases are built and published by [`dist`](https://github.com/axodotdev/cargo-dist)
+on tag push. The tag must match the `version` in `Cargo.toml`:
+
+```bash
+# bump version in Cargo.toml first, then:
+git tag vX.Y.Z
+git push --tags
+```
+
+The `release.yml` workflow builds the per-platform binaries and publishes a GitHub
+Release with the binaries, checksums, and the `aipm-installer.sh` / `aipm-installer.ps1`
+scripts. The workflow is generated — to change build targets or installers, edit the
+dist config and run `dist generate`, never hand-edit `.github/workflows/release.yml`.
 
 ## License
 
