@@ -1,8 +1,8 @@
-use std::fs;
-use anyhow::{Context as _, Result};
-use serde::{Serialize, Deserialize};
 use crate::context::Context;
 use crate::manifest::Manifest;
+use anyhow::{Context as _, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct State {
@@ -18,7 +18,8 @@ impl State {
         if !path.is_file() {
             return Ok(State::default());
         }
-        let raw = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let raw =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
     }
 
@@ -52,9 +53,13 @@ mod tests {
     fn save_then_load_roundtrips() {
         let tmp = tempdir().unwrap();
         let ctx = ctx_for(tmp.path());
-        let mut s = State::default();
-        s.active = Some("focus".into());
-        s.manifest.files.push(PathBuf::from(".claude/settings.local.json"));
+        let mut s = State {
+            active: Some("focus".into()),
+            ..Default::default()
+        };
+        s.manifest
+            .files
+            .push(PathBuf::from(".claude/settings.local.json"));
         s.manifest.mcp_servers.push("db".into());
         s.save(&ctx).unwrap();
 

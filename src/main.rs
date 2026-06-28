@@ -1,11 +1,11 @@
-mod context;
-mod profile;
-mod manifest;
-mod state;
-mod slots;
-mod gitignore;
-mod target;
 mod cli;
+mod context;
+mod gitignore;
+mod manifest;
+mod profile;
+mod slots;
+mod state;
+mod target;
 
 use clap::Parser;
 

@@ -1,17 +1,21 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use anyhow::{anyhow, Result};
-use serde_json::Value;
+use super::Target;
 use crate::context::Context;
 use crate::manifest::Manifest;
 use crate::profile::Profile;
 use crate::slots;
-use super::Target;
+use anyhow::{anyhow, Result};
+use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-pub struct ClaudeCodeTarget { pub force: bool }
+pub struct ClaudeCodeTarget {
+    pub force: bool,
+}
 
 impl ClaudeCodeTarget {
-    pub fn new(force: bool) -> ClaudeCodeTarget { ClaudeCodeTarget { force } }
+    pub fn new(force: bool) -> ClaudeCodeTarget {
+        ClaudeCodeTarget { force }
+    }
 }
 
 impl Target for ClaudeCodeTarget {
@@ -118,19 +122,30 @@ impl ClaudeCodeTarget {
 }
 
 fn rel(ctx: &Context, path: &Path) -> PathBuf {
-    path.strip_prefix(&ctx.repo_root).unwrap_or(path).to_path_buf()
+    path.strip_prefix(&ctx.repo_root)
+        .unwrap_or(path)
+        .to_path_buf()
 }
 
-fn mcp_servers_mut<'a>(cfg: &'a mut Value, repo_root: &Path) -> &'a mut serde_json::Map<String, Value> {
+fn mcp_servers_mut<'a>(
+    cfg: &'a mut Value,
+    repo_root: &Path,
+) -> &'a mut serde_json::Map<String, Value> {
     let key = repo_root.to_string_lossy().to_string();
     cfg.as_object_mut()
         .unwrap()
-        .entry("projects").or_insert_with(|| Value::Object(Default::default()))
-        .as_object_mut().unwrap()
-        .entry(key).or_insert_with(|| Value::Object(Default::default()))
-        .as_object_mut().unwrap()
-        .entry("mcpServers").or_insert_with(|| Value::Object(Default::default()))
-        .as_object_mut().unwrap()
+        .entry("projects")
+        .or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut()
+        .unwrap()
+        .entry(key)
+        .or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut()
+        .unwrap()
+        .entry("mcpServers")
+        .or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut()
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -161,9 +176,13 @@ mod tests {
         let p = profile_with(Some(json!({"model":"opus"})), Some("be terse"));
         let m = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap();
 
-        assert!(fs::read_to_string(ctx.settings_local_path()).unwrap().contains("opus"));
+        assert!(fs::read_to_string(ctx.settings_local_path())
+            .unwrap()
+            .contains("opus"));
         assert_eq!(fs::read_to_string(ctx.local_md_path()).unwrap(), "be terse");
-        assert!(m.files.contains(&PathBuf::from(".claude/settings.local.json")));
+        assert!(m
+            .files
+            .contains(&PathBuf::from(".claude/settings.local.json")));
         // local.md is tool-owned and written unconditionally; intentionally NOT in the manifest
         assert!(!m.files.contains(&PathBuf::from(".claude/local.md")));
     }
@@ -221,9 +240,13 @@ mod tests {
         let p = profile_with_mcp(json!({"db": {"command": "run-db"}}));
         let m = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap();
 
-        let cfg: Value = serde_json::from_str(&fs::read_to_string(&ctx.user_config).unwrap()).unwrap();
+        let cfg: Value =
+            serde_json::from_str(&fs::read_to_string(&ctx.user_config).unwrap()).unwrap();
         let key = ctx.repo_root.to_string_lossy().to_string();
-        assert_eq!(cfg["projects"][&key]["mcpServers"]["db"]["command"], "run-db");
+        assert_eq!(
+            cfg["projects"][&key]["mcpServers"]["db"]["command"],
+            "run-db"
+        );
         assert!(m.mcp_servers.contains(&"db".to_string()));
     }
 
@@ -241,7 +264,8 @@ mod tests {
         let m = t.project(&ctx, &p).unwrap();
         t.clear(&ctx, &m).unwrap();
 
-        let cfg: Value = serde_json::from_str(&fs::read_to_string(&ctx.user_config).unwrap()).unwrap();
+        let cfg: Value =
+            serde_json::from_str(&fs::read_to_string(&ctx.user_config).unwrap()).unwrap();
         assert!(cfg["projects"][&key]["mcpServers"]["keep"].is_object());
         assert!(cfg["projects"][&key]["mcpServers"]["db"].is_null());
     }
@@ -265,7 +289,10 @@ mod tests {
             settings: None,
             claude_md: None,
             mcp_servers: Default::default(),
-            agents: vec![crate::profile::ProfileFile { rel: PathBuf::from(rel), contents: body.as_bytes().to_vec() }],
+            agents: vec![crate::profile::ProfileFile {
+                rel: PathBuf::from(rel),
+                contents: body.as_bytes().to_vec(),
+            }],
             skills: vec![],
         }
     }
@@ -277,7 +304,10 @@ mod tests {
         let p = profile_with_agent("rev.md", "agent body");
         let m = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap();
 
-        assert_eq!(fs::read_to_string(ctx.agents_dir().join("rev.md")).unwrap(), "agent body");
+        assert_eq!(
+            fs::read_to_string(ctx.agents_dir().join("rev.md")).unwrap(),
+            "agent body"
+        );
         assert!(m.files.contains(&PathBuf::from(".claude/agents/rev.md")));
         let gi = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
         assert!(gi.contains(".claude/agents/rev.md"));
@@ -288,7 +318,9 @@ mod tests {
         let tmp = tempdir().unwrap();
         let ctx = ctx_for(tmp.path());
         let t = ClaudeCodeTarget::new(false);
-        let m = t.project(&ctx, &profile_with_agent("rev.md", "body")).unwrap();
+        let m = t
+            .project(&ctx, &profile_with_agent("rev.md", "body"))
+            .unwrap();
         t.clear(&ctx, &m).unwrap();
         assert!(!ctx.agents_dir().join("rev.md").exists());
     }

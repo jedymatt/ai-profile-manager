@@ -1,6 +1,6 @@
 use assert_cmd::Command;
-use tempfile::tempdir;
 use std::fs;
+use tempfile::tempdir;
 
 fn write_profile_settings(repo: &std::path::Path, name: &str, json: &str) {
     let dir = repo.join(".claude-profiles").join(name);
@@ -10,7 +10,8 @@ fn write_profile_settings(repo: &std::path::Path, name: &str, json: &str) {
 
 fn aipm(repo: &std::path::Path, user_config: &std::path::Path) -> Command {
     let mut c = Command::cargo_bin("aipm").unwrap();
-    c.env("AIPM_REPO_ROOT", repo).env("AIPM_USER_CONFIG", user_config);
+    c.env("AIPM_REPO_ROOT", repo)
+        .env("AIPM_USER_CONFIG", user_config);
     c
 }
 
@@ -131,12 +132,18 @@ fn remove_deletes_profile_and_clears_if_active() {
     write_profile_settings(repo, "focus", r#"{"model":"opus"}"#);
     aipm(repo, &user).args(["use", "focus"]).assert().success();
 
-    aipm(repo, &user).args(["remove", "focus"]).assert().success();
+    aipm(repo, &user)
+        .args(["remove", "focus"])
+        .assert()
+        .success();
     assert!(!repo.join(".claude-profiles/focus").exists());
     // it was active, so its projection is gone too
     assert!(!repo.join(".claude/settings.local.json").exists());
 
-    aipm(repo, &user).args(["remove", "ghost"]).assert().failure();
+    aipm(repo, &user)
+        .args(["remove", "ghost"])
+        .assert()
+        .failure();
 }
 
 #[test]

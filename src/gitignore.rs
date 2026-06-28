@@ -1,6 +1,6 @@
+use anyhow::{Context as _, Result};
 use std::fs;
 use std::path::Path;
-use anyhow::{Context as _, Result};
 
 pub fn ensure_ignored(repo_root: &Path, entries: &[&str]) -> Result<()> {
     let path = repo_root.join(".gitignore");

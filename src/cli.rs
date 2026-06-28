@@ -1,10 +1,10 @@
-use anyhow::Result;
-use clap::{Parser, Subcommand};
 use crate::context::Context;
 use crate::profile::Profile;
 use crate::state::State;
 use crate::target::{ClaudeCodeTarget, Target};
 use crate::{gitignore, slots};
+use anyhow::Result;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "aipm", about = "Personal Claude Code profile switcher")]
@@ -87,7 +87,11 @@ fn default_profile_dir(ctx: &Context) -> std::path::PathBuf {
 
 fn ensure_import(ctx: &Context) -> Result<()> {
     let path = ctx.claude_md_path();
-    let mut body = if path.is_file() { std::fs::read_to_string(&path)? } else { String::new() };
+    let mut body = if path.is_file() {
+        std::fs::read_to_string(&path)?
+    } else {
+        String::new()
+    };
     if body.lines().any(|l| l.trim() == IMPORT_LINE) {
         return Ok(());
     }
@@ -124,7 +128,11 @@ fn cmd_list(ctx: &Context) -> Result<()> {
         .collect();
     names.sort();
     for name in names {
-        let marker = if active.as_deref() == Some(name.as_str()) { "* " } else { "  " };
+        let marker = if active.as_deref() == Some(name.as_str()) {
+            "* "
+        } else {
+            "  "
+        };
         println!("{marker}{name}");
     }
     Ok(())
@@ -135,10 +143,10 @@ fn cmd_use(ctx: &Context, name: &str, force: bool) -> Result<()> {
     let mut state = State::load(ctx)?;
     let target = ClaudeCodeTarget::new(force);
 
-    target.clear(ctx, &state.manifest)?;       // remove previously projected artifacts (owned only)
-    let manifest = target.project(ctx, &profile)?;  // foreign-protection lives in project()
+    target.clear(ctx, &state.manifest)?; // remove previously projected artifacts (owned only)
+    let manifest = target.project(ctx, &profile)?; // foreign-protection lives in project()
 
-    state.active = Some(name.to_string());
+    state.active = Some(profile.name.clone());
     state.manifest = manifest;
     state.save(ctx)?;
 
@@ -160,7 +168,10 @@ fn cmd_status(ctx: &Context) -> Result<()> {
     let state = State::load(ctx)?;
     match &state.active {
         Some(name) => println!("Active profile: {name}"),
-        None => { println!("No active profile."); return Ok(()); }
+        None => {
+            println!("No active profile.");
+            return Ok(());
+        }
     }
     println!("Projected files:");
     for rel in &state.manifest.files {
@@ -169,7 +180,10 @@ fn cmd_status(ctx: &Context) -> Result<()> {
         println!("  {} [{}]", rel.display(), tag);
     }
     if !state.manifest.mcp_servers.is_empty() {
-        println!("Projected MCP servers: {}", state.manifest.mcp_servers.join(", "));
+        println!(
+            "Projected MCP servers: {}",
+            state.manifest.mcp_servers.join(", ")
+        );
     }
     Ok(())
 }

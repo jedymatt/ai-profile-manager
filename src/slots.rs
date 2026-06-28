@@ -1,17 +1,20 @@
+use anyhow::{anyhow, Context as _, Result};
+use serde_json::Value;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use anyhow::{anyhow, Context as _, Result};
-use serde_json::Value;
 use tempfile::NamedTempFile;
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| anyhow!("no parent for {}", path.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("no parent for {}", path.display()))?;
     fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     let mut tmp = NamedTempFile::new_in(parent)?;
     tmp.write_all(bytes)?;
     tmp.flush()?;
-    tmp.persist(path).map_err(|e| anyhow!("writing {}: {}", path.display(), e))?;
+    tmp.persist(path)
+        .map_err(|e| anyhow!("writing {}: {}", path.display(), e))?;
     Ok(())
 }
 

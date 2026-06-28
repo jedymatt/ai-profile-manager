@@ -1,10 +1,13 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use crate::context::Context;
 use anyhow::{Context as _, Result};
 use serde_json::{Map, Value};
-use crate::context::Context;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-pub struct ProfileFile { pub rel: PathBuf, pub contents: Vec<u8> }
+pub struct ProfileFile {
+    pub rel: PathBuf,
+    pub contents: Vec<u8>,
+}
 
 pub struct Profile {
     pub name: String,
@@ -32,20 +35,32 @@ impl Profile {
 
         let mcp_servers = match read_json_opt(&dir.join("mcp.json"))? {
             Some(Value::Object(m)) => m,
-            Some(_) => anyhow::bail!("{}/mcp.json must be a JSON object of server definitions", name),
+            Some(_) => anyhow::bail!(
+                "{}/mcp.json must be a JSON object of server definitions",
+                name
+            ),
             None => Map::new(),
         };
 
         let agents = read_tree(&dir.join("agents"))?;
         let skills = read_tree(&dir.join("skills"))?;
 
-        Ok(Profile { name: name.to_string(), settings, claude_md, mcp_servers, agents, skills })
+        Ok(Profile {
+            name: name.to_string(),
+            settings,
+            claude_md,
+            mcp_servers,
+            agents,
+            skills,
+        })
     }
 }
 
 fn read_string_opt(path: &Path) -> Result<Option<String>> {
     if path.is_file() {
-        Ok(Some(fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?))
+        Ok(Some(
+            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
+        ))
     } else {
         Ok(None)
     }
@@ -53,8 +68,9 @@ fn read_string_opt(path: &Path) -> Result<Option<String>> {
 
 fn read_json_opt(path: &Path) -> Result<Option<Value>> {
     match read_string_opt(path)? {
-        Some(s) => Ok(Some(serde_json::from_str(&s)
-            .with_context(|| format!("parsing {}", path.display()))?)),
+        Some(s) => Ok(Some(
+            serde_json::from_str(&s).with_context(|| format!("parsing {}", path.display()))?,
+        )),
         None => Ok(None),
     }
 }
@@ -76,7 +92,10 @@ fn collect(base: &Path, dir: &Path, out: &mut Vec<ProfileFile>) -> Result<()> {
             collect(base, &path, out)?;
         } else {
             let rel = path.strip_prefix(base).unwrap().to_path_buf();
-            out.push(ProfileFile { rel, contents: fs::read(&path)? });
+            out.push(ProfileFile {
+                rel,
+                contents: fs::read(&path)?,
+            });
         }
     }
     Ok(())
