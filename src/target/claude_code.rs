@@ -56,7 +56,7 @@ impl Target for ClaudeCodeTarget {
         if !manifest.mcp_servers.is_empty() {
             let mut cfg = slots::read_json(&ctx.user_config)?;
             {
-                let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
+                let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root)?;
                 for name in &manifest.mcp_servers {
                     servers.remove(name);
                 }
@@ -98,13 +98,18 @@ impl ClaudeCodeTarget {
 
         if !profile.mcp_servers.is_empty() {
             let mut cfg = slots::read_json(&ctx.user_config)?;
-            let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
+            let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root)?;
             for (name, def) in &profile.mcp_servers {
-                if servers.contains_key(name) && !self.force {
-                    return Err(anyhow!(
-                        "MCP server '{}' already exists in {} and is not managed by aipm; rerun with --force to overwrite",
-                        name, ctx.user_config.display()
-                    ));
+                if servers.contains_key(name) {
+                    if !self.force {
+                        return Err(anyhow!(
+                            "MCP server '{}' already exists in {} and is not managed by aipm; rerun with --force to back it up and overwrite",
+                            name, ctx.user_config.display()
+                        ));
+                    }
+                    // --force: preserve the foreign definition before replacing it.
+                    let old = servers.get(name).cloned().unwrap_or(Value::Null);
+                    backup_foreign_mcp(ctx, name, &old)?;
                 }
                 servers.insert(name.clone(), def.clone());
                 manifest.mcp_servers.push(name.clone());
@@ -128,7 +133,7 @@ impl ClaudeCodeTarget {
         if !partial.mcp_servers.is_empty() {
             let mut cfg = slots::read_json(&ctx.user_config)?;
             {
-                let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
+                let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root)?;
                 for name in &partial.mcp_servers {
                     servers.remove(name);
                 }
@@ -185,22 +190,46 @@ fn rel(ctx: &Context, path: &Path) -> PathBuf {
 fn mcp_servers_mut<'a>(
     cfg: &'a mut Value,
     repo_root: &Path,
-) -> &'a mut serde_json::Map<String, Value> {
+) -> Result<&'a mut serde_json::Map<String, Value>> {
     let key = repo_root.to_string_lossy().to_string();
-    cfg.as_object_mut()
-        .unwrap()
+    let root = cfg
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("user config root is not a JSON object"))?;
+    let projects = root
         .entry("projects")
         .or_insert_with(|| Value::Object(Default::default()))
         .as_object_mut()
-        .unwrap()
+        .ok_or_else(|| anyhow!("user config `projects` is not a JSON object"))?;
+    let project = projects
         .entry(key)
         .or_insert_with(|| Value::Object(Default::default()))
         .as_object_mut()
-        .unwrap()
+        .ok_or_else(|| anyhow!("user config project entry is not a JSON object"))?;
+    let servers = project
         .entry("mcpServers")
         .or_insert_with(|| Value::Object(Default::default()))
         .as_object_mut()
-        .unwrap()
+        .ok_or_else(|| anyhow!("user config `mcpServers` is not a JSON object"))?;
+    Ok(servers)
+}
+
+/// Append a displaced foreign MCP server definition to a gitignored backup file so
+/// `--force` never destroys unowned config. Keyed by server name -> array of displaced
+/// definitions (newest appended), so repeated overwrites never lose an earlier backup.
+fn backup_foreign_mcp(ctx: &Context, name: &str, old: &Value) -> Result<()> {
+    let path = ctx.profiles_dir().join(".mcp-backups.json");
+    let mut backups = slots::read_json(&path)?; // {} if missing
+    let obj = backups
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("{} is not a JSON object", path.display()))?;
+    let entry = obj
+        .entry(name.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let arr = entry
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("{} entry for '{}' is not an array", path.display(), name))?;
+    arr.push(old.clone());
+    slots::write_json(&path, &backups)
 }
 
 #[cfg(test)]
@@ -336,6 +365,44 @@ mod tests {
         let p = profile_with_mcp(json!({"db": {"command": "ours"}}));
         let err = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap_err();
         assert!(err.to_string().contains("db"));
+    }
+
+    #[test]
+    fn force_backs_up_foreign_mcp_server() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let key = ctx.repo_root.to_string_lossy().to_string();
+        let pre = json!({"projects": {&key: {"mcpServers": {"db": {"command": "theirs"}}}}});
+        fs::write(&ctx.user_config, serde_json::to_string(&pre).unwrap()).unwrap();
+
+        let p = profile_with_mcp(json!({"db": {"command": "ours"}}));
+        ClaudeCodeTarget::new(true).project(&ctx, &p).unwrap();
+
+        // live config now has our value
+        let cfg: Value =
+            serde_json::from_str(&fs::read_to_string(&ctx.user_config).unwrap()).unwrap();
+        assert_eq!(cfg["projects"][&key]["mcpServers"]["db"]["command"], "ours");
+
+        // the displaced foreign definition is preserved in the backup file
+        let backups: Value = serde_json::from_str(
+            &fs::read_to_string(ctx.profiles_dir().join(".mcp-backups.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(backups["db"][0]["command"], "theirs");
+    }
+
+    #[test]
+    fn malformed_user_config_structure_errors_cleanly() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        // valid JSON, but the wrong shape (array, not object)
+        fs::write(&ctx.user_config, "[]").unwrap();
+
+        let p = profile_with_mcp(json!({"db": {"command": "run-db"}}));
+        let err = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap_err();
+        assert!(err.to_string().contains("not a JSON object"));
+        // file must be left untouched (not corrupted)
+        assert_eq!(fs::read_to_string(&ctx.user_config).unwrap(), "[]");
     }
 
     fn profile_with_agent(rel: &str, body: &str) -> Profile {
