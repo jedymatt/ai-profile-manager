@@ -32,6 +32,15 @@ pub enum Command {
     Deactivate,
     /// Show the active profile and what is projected (with a drift check)
     Status,
+    /// Open a profile directory in $EDITOR (or print its path)
+    Edit {
+        name: String,
+        /// Print the profile directory path instead of launching an editor
+        #[arg(long)]
+        print_path: bool,
+    },
+    /// Delete a profile (deactivating it first if it is active)
+    Remove { name: String },
 }
 
 const IMPORT_LINE: &str = "@.claude/local.md";
@@ -50,6 +59,8 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Use { name, force } => cmd_use(&ctx, &name, force),
         Command::Deactivate => cmd_deactivate(&ctx),
         Command::Status => cmd_status(&ctx),
+        Command::Edit { name, print_path } => cmd_edit(&ctx, &name, print_path),
+        Command::Remove { name } => cmd_remove(&ctx, &name),
     }
 }
 
@@ -160,5 +171,36 @@ fn cmd_status(ctx: &Context) -> Result<()> {
     if !state.manifest.mcp_servers.is_empty() {
         println!("Projected MCP servers: {}", state.manifest.mcp_servers.join(", "));
     }
+    Ok(())
+}
+
+fn cmd_edit(ctx: &Context, name: &str, print_path: bool) -> Result<()> {
+    let dir = Profile::dir(ctx, name);
+    if !dir.is_dir() {
+        anyhow::bail!("profile '{}' not found", name);
+    }
+    if print_path {
+        println!("{}", dir.display());
+        return Ok(());
+    }
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    std::process::Command::new(editor).arg(&dir).status()?;
+    Ok(())
+}
+
+fn cmd_remove(ctx: &Context, name: &str) -> Result<()> {
+    let dir = Profile::dir(ctx, name);
+    if !dir.is_dir() {
+        anyhow::bail!("profile '{}' not found", name);
+    }
+    let mut state = State::load(ctx)?;
+    if state.active.as_deref() == Some(name) {
+        ClaudeCodeTarget::new(false).clear(ctx, &state.manifest)?;
+        state.active = None;
+        state.manifest = Default::default();
+        state.save(ctx)?;
+    }
+    std::fs::remove_dir_all(&dir)?;
+    println!("Removed profile '{}'.", name);
     Ok(())
 }

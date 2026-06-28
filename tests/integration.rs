@@ -120,3 +120,35 @@ fn status_reports_active_and_detects_drift() {
         .success()
         .stdout(predicates::str::contains("missing"));
 }
+
+#[test]
+fn remove_deletes_profile_and_clears_if_active() {
+    let tmp = tempdir().unwrap();
+    let repo = tmp.path();
+    let user = repo.join("user.json");
+
+    aipm(repo, &user).arg("init").assert().success();
+    write_profile_settings(repo, "focus", r#"{"model":"opus"}"#);
+    aipm(repo, &user).args(["use", "focus"]).assert().success();
+
+    aipm(repo, &user).args(["remove", "focus"]).assert().success();
+    assert!(!repo.join(".claude-profiles/focus").exists());
+    // it was active, so its projection is gone too
+    assert!(!repo.join(".claude/settings.local.json").exists());
+
+    aipm(repo, &user).args(["remove", "ghost"]).assert().failure();
+}
+
+#[test]
+fn edit_resolves_path_for_existing_profile() {
+    let tmp = tempdir().unwrap();
+    let repo = tmp.path();
+    let user = repo.join("user.json");
+    aipm(repo, &user).arg("init").assert().success();
+    aipm(repo, &user).args(["new", "focus"]).assert().success();
+    aipm(repo, &user)
+        .args(["edit", "focus", "--print-path"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(".claude-profiles"));
+}
