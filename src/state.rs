@@ -24,11 +24,9 @@ impl State {
 
     pub fn save(&self, ctx: &Context) -> Result<()> {
         let path = ctx.state_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_vec_pretty(self)?;
-        fs::write(&path, &json).with_context(|| format!("writing {}", path.display()))
+        let mut json = serde_json::to_vec_pretty(self)?;
+        json.push(b'\n');
+        crate::slots::atomic_write(&path, &json)
     }
 }
 
