@@ -71,6 +71,13 @@ Profiles live in the gitignored `.claude-profiles/` directory:
 Every part of a profile is optional. A profile that only sets a model and a
 couple of permissions contains just `settings.json`.
 
+The tool treats each projected local slot as **fully owned and regenerated** from
+the active profile — it does not merge a profile into pre-existing local-slot
+content. `settings.local.json` is written wholesale from the profile's
+`settings.json`, `.claude/local.md` from its `CLAUDE.md`, and so on. A local slot
+the tool does not own (not listed in any manifest) is treated as foreign and
+protected, never silently overwritten (see Error handling).
+
 ### Activation projects into native local slots
 
 `aipm use <name>` projects the active profile into Claude Code's own gitignored
