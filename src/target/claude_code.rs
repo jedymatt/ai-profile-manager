@@ -21,43 +21,28 @@ impl ClaudeCodeTarget {
 impl Target for ClaudeCodeTarget {
     fn project(&self, ctx: &Context, profile: &Profile) -> Result<Manifest> {
         let mut manifest = Manifest::default();
-
-        if let Some(settings) = &profile.settings {
-            let path = ctx.settings_local_path();
-            self.guard_foreign(&path)?;
-            slots::write_json(&path, settings)?;
-            manifest.files.push(rel(ctx, &path));
-        }
-
-        // local.md is always tool-owned (created by `init`): write the profile's
-        // markdown, or empty when it has none. Never guarded, never in the manifest —
-        // `clear` resets it rather than deleting, so the committed `@.claude/local.md`
-        // import never dangles.
-        slots::atomic_write(
-            &ctx.local_md_path(),
-            profile.claude_md.as_deref().unwrap_or("").as_bytes(),
-        )?;
-
-        self.drop_tree(ctx, &profile.agents, &ctx.agents_dir(), &mut manifest)?;
-        self.drop_tree(ctx, &profile.skills, &ctx.skills_dir(), &mut manifest)?;
-
-        if !profile.mcp_servers.is_empty() {
-            let mut cfg = slots::read_json(&ctx.user_config)?;
-            let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
-            for (name, def) in &profile.mcp_servers {
-                if servers.contains_key(name) && !self.force {
-                    return Err(anyhow!(
-                        "MCP server '{}' already exists in {} and is not managed by aipm; rerun with --force to overwrite",
-                        name, ctx.user_config.display()
-                    ));
+        match self.project_inner(ctx, profile, &mut manifest) {
+            Ok(()) => Ok(manifest),
+            Err(e) => {
+                // Best-effort rollback: undo whatever was written before the failure.
+                // `manifest` precisely tracks files and MCP entries committed so far.
+                match self.rollback_partial(ctx, &manifest) {
+                    Ok(()) => Err(e),
+                    Err(rb_err) => Err(anyhow!(
+                        "projection failed: {e:#}\n\
+                         Rollback also failed ({rb_err:#}); partial state left on disk:\n  \
+                         files: [{}]\n  MCP servers: [{}]",
+                        manifest
+                            .files
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        manifest.mcp_servers.join(", "),
+                    )),
                 }
-                servers.insert(name.clone(), def.clone());
-                manifest.mcp_servers.push(name.clone());
             }
-            slots::write_json(&ctx.user_config, &cfg)?;
         }
-
-        Ok(manifest)
     }
 
     fn clear(&self, ctx: &Context, manifest: &Manifest) -> Result<()> {
@@ -83,6 +68,76 @@ impl Target for ClaudeCodeTarget {
 }
 
 impl ClaudeCodeTarget {
+    /// Inner body of `project`: writes artifacts and accumulates `manifest` as it
+    /// goes. Callers must call `rollback_partial` on the accumulated manifest when
+    /// this returns `Err`, so that no orphan files are left behind.
+    fn project_inner(
+        &self,
+        ctx: &Context,
+        profile: &Profile,
+        manifest: &mut Manifest,
+    ) -> Result<()> {
+        if let Some(settings) = &profile.settings {
+            let path = ctx.settings_local_path();
+            self.guard_foreign(&path)?;
+            slots::write_json(&path, settings)?;
+            manifest.files.push(rel(ctx, &path));
+        }
+
+        // local.md is always tool-owned (created by `init`): write the profile's
+        // markdown, or empty when it has none. Never guarded, never in the manifest —
+        // `clear` resets it rather than deleting, so the committed `@.claude/local.md`
+        // import never dangles.
+        slots::atomic_write(
+            &ctx.local_md_path(),
+            profile.claude_md.as_deref().unwrap_or("").as_bytes(),
+        )?;
+
+        self.drop_tree(ctx, &profile.agents, &ctx.agents_dir(), manifest)?;
+        self.drop_tree(ctx, &profile.skills, &ctx.skills_dir(), manifest)?;
+
+        if !profile.mcp_servers.is_empty() {
+            let mut cfg = slots::read_json(&ctx.user_config)?;
+            let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
+            for (name, def) in &profile.mcp_servers {
+                if servers.contains_key(name) && !self.force {
+                    return Err(anyhow!(
+                        "MCP server '{}' already exists in {} and is not managed by aipm; rerun with --force to overwrite",
+                        name, ctx.user_config.display()
+                    ));
+                }
+                servers.insert(name.clone(), def.clone());
+                manifest.mcp_servers.push(name.clone());
+            }
+            slots::write_json(&ctx.user_config, &cfg)?;
+        }
+
+        Ok(())
+    }
+
+    /// Undo the partial writes recorded in `partial` after a failed `project_inner`.
+    /// Mirrors what `clear` does, but operates only on what was written so far.
+    fn rollback_partial(&self, ctx: &Context, partial: &Manifest) -> Result<()> {
+        for rel_path in &partial.files {
+            slots::remove_if_exists(&ctx.repo_root.join(rel_path))?;
+        }
+        // local.md is always written unconditionally by project_inner; reset it.
+        if ctx.local_md_path().exists() {
+            slots::atomic_write(&ctx.local_md_path(), b"")?;
+        }
+        if !partial.mcp_servers.is_empty() {
+            let mut cfg = slots::read_json(&ctx.user_config)?;
+            {
+                let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
+                for name in &partial.mcp_servers {
+                    servers.remove(name);
+                }
+            }
+            slots::write_json(&ctx.user_config, &cfg)?;
+        }
+        Ok(())
+    }
+
     fn drop_tree(
         &self,
         ctx: &Context,
@@ -335,5 +390,107 @@ mod tests {
             .project(&ctx, &profile_with_agent("rev.md", "mine"))
             .unwrap_err();
         assert!(err.to_string().contains("rev.md"));
+    }
+
+    // --- rollback regression tests ---
+
+    /// If project() fails mid-way (e.g. foreign MCP collision after writing settings),
+    /// the earlier partial writes must be rolled back so that a subsequent non-force
+    /// `use` does not trip on orphan files.
+    #[test]
+    fn partial_project_is_rolled_back_on_failure() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let key = ctx.repo_root.to_string_lossy().to_string();
+
+        // Pre-existing foreign MCP entry that will cause project() to fail after it
+        // has already written settings.local.json and local.md.
+        let pre = json!({"projects": {&key: {"mcpServers": {"db": {"command": "theirs"}}}}});
+        fs::write(&ctx.user_config, serde_json::to_string(&pre).unwrap()).unwrap();
+
+        // A profile that has settings *and* an MCP server whose name collides.
+        let profile = Profile {
+            name: "focus".into(),
+            settings: Some(json!({"model": "opus"})),
+            claude_md: Some("hello".into()),
+            mcp_servers: json!({"db": {"command": "ours"}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            agents: vec![],
+            skills: vec![],
+        };
+
+        let err = ClaudeCodeTarget::new(false)
+            .project(&ctx, &profile)
+            .unwrap_err();
+        // The original collision error is surfaced unchanged.
+        assert!(err.to_string().contains("db"));
+
+        // settings.local.json written before the failure must have been removed.
+        assert!(
+            !ctx.settings_local_path().exists(),
+            "settings.local.json should be rolled back"
+        );
+        // local.md must be reset to empty (not left with profile content).
+        let local_md = fs::read_to_string(ctx.local_md_path()).unwrap_or_default();
+        assert_eq!(
+            local_md, "",
+            "local.md should be reset to empty after rollback"
+        );
+        // The foreign MCP entry must still be intact.
+        let cfg: Value =
+            serde_json::from_str(&fs::read_to_string(&ctx.user_config).unwrap()).unwrap();
+        assert_eq!(
+            cfg["projects"][&key]["mcpServers"]["db"]["command"], "theirs",
+            "foreign MCP entry must not be touched by rollback"
+        );
+    }
+
+    /// After a rolled-back failure, a second `use` (without force) must succeed
+    /// because no orphan files remain on disk.
+    #[test]
+    fn use_succeeds_after_rolled_back_failure() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let key = ctx.repo_root.to_string_lossy().to_string();
+
+        // Trigger a failure: foreign MCP collision.
+        let pre = json!({"projects": {&key: {"mcpServers": {"db": {"command": "theirs"}}}}});
+        fs::write(&ctx.user_config, serde_json::to_string(&pre).unwrap()).unwrap();
+
+        let failing = Profile {
+            name: "focus".into(),
+            settings: Some(json!({"model": "opus"})),
+            claude_md: None,
+            mcp_servers: json!({"db": {"command": "ours"}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            agents: vec![],
+            skills: vec![],
+        };
+        assert!(
+            ClaudeCodeTarget::new(false)
+                .project(&ctx, &failing)
+                .is_err(),
+            "first project should fail"
+        );
+
+        // Now try a different profile that does NOT use the colliding MCP name.
+        let ok_profile = Profile {
+            name: "clean".into(),
+            settings: Some(json!({"model": "sonnet"})),
+            claude_md: None,
+            mcp_servers: Default::default(),
+            agents: vec![],
+            skills: vec![],
+        };
+        let manifest = ClaudeCodeTarget::new(false)
+            .project(&ctx, &ok_profile)
+            .expect("second project must succeed — no orphan files from the rollback");
+        assert!(manifest
+            .files
+            .contains(&PathBuf::from(".claude/settings.local.json")));
     }
 }
