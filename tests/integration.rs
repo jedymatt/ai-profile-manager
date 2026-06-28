@@ -159,3 +159,56 @@ fn edit_resolves_path_for_existing_profile() {
         .success()
         .stdout(predicates::str::contains(".claude-profiles"));
 }
+
+#[test]
+fn committed_team_config_is_untouched_through_full_cycle() {
+    let tmp = tempdir().unwrap();
+    let repo = tmp.path();
+    let user = repo.join("user.json");
+
+    // committed team config that must never change
+    fs::create_dir_all(repo.join(".claude/agents")).unwrap();
+    fs::write(repo.join(".claude/settings.json"), "{\"model\":\"team\"}\n").unwrap();
+    fs::write(repo.join(".mcp.json"), "{\"mcpServers\":{}}\n").unwrap();
+    fs::write(repo.join(".claude/agents/team.md"), "team agent\n").unwrap();
+    fs::write(repo.join("CLAUDE.md"), "# Team rules\n").unwrap();
+
+    let settings_before = fs::read(repo.join(".claude/settings.json")).unwrap();
+    let mcp_before = fs::read(repo.join(".mcp.json")).unwrap();
+    let agent_before = fs::read(repo.join(".claude/agents/team.md")).unwrap();
+
+    aipm(repo, &user).arg("init").assert().success();
+
+    // two profiles carrying settings + CLAUDE.md + a (personal, non-colliding) agent
+    for (name, model) in [("alpha", "opus"), ("beta", "haiku")] {
+        let dir = repo.join(".claude-profiles").join(name);
+        fs::create_dir_all(dir.join("agents")).unwrap();
+        fs::write(
+            dir.join("settings.json"),
+            format!("{{\"model\":\"{model}\"}}"),
+        )
+        .unwrap();
+        fs::write(dir.join("CLAUDE.md"), format!("be {model}")).unwrap();
+        fs::write(dir.join("agents").join(format!("{name}.md")), "personal").unwrap();
+    }
+
+    aipm(repo, &user).args(["use", "alpha"]).assert().success();
+    aipm(repo, &user).args(["use", "beta"]).assert().success();
+    aipm(repo, &user).arg("deactivate").assert().success();
+
+    // committed team files are byte-identical
+    assert_eq!(
+        fs::read(repo.join(".claude/settings.json")).unwrap(),
+        settings_before
+    );
+    assert_eq!(fs::read(repo.join(".mcp.json")).unwrap(), mcp_before);
+    assert_eq!(
+        fs::read(repo.join(".claude/agents/team.md")).unwrap(),
+        agent_before
+    );
+
+    // CLAUDE.md changed only by the single appended import line
+    let claude_md = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
+    assert!(claude_md.contains("# Team rules"));
+    assert_eq!(claude_md.matches("@.claude/local.md").count(), 1);
+}
