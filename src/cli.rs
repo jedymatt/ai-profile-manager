@@ -30,6 +30,8 @@ pub enum Command {
     },
     /// Remove the active personal overlay, leaving only committed team config
     Deactivate,
+    /// Show the active profile and what is projected (with a drift check)
+    Status,
 }
 
 const IMPORT_LINE: &str = "@.claude/local.md";
@@ -47,6 +49,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::List => cmd_list(&ctx),
         Command::Use { name, force } => cmd_use(&ctx, &name, force),
         Command::Deactivate => cmd_deactivate(&ctx),
+        Command::Status => cmd_status(&ctx),
     }
 }
 
@@ -139,5 +142,23 @@ fn cmd_deactivate(ctx: &Context) -> Result<()> {
     state.manifest = Default::default();
     state.save(ctx)?;
     println!("Deactivated. Committed team config is unchanged.");
+    Ok(())
+}
+
+fn cmd_status(ctx: &Context) -> Result<()> {
+    let state = State::load(ctx)?;
+    match &state.active {
+        Some(name) => println!("Active profile: {name}"),
+        None => { println!("No active profile."); return Ok(()); }
+    }
+    println!("Projected files:");
+    for rel in &state.manifest.files {
+        let present = ctx.repo_root.join(rel).exists();
+        let tag = if present { "ok" } else { "missing (drift)" };
+        println!("  {} [{}]", rel.display(), tag);
+    }
+    if !state.manifest.mcp_servers.is_empty() {
+        println!("Projected MCP servers: {}", state.manifest.mcp_servers.join(", "));
+    }
     Ok(())
 }

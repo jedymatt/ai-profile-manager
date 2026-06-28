@@ -94,3 +94,29 @@ fn use_unknown_profile_fails() {
     aipm(repo, &user).arg("init").assert().success();
     aipm(repo, &user).args(["use", "ghost"]).assert().failure();
 }
+
+#[test]
+fn status_reports_active_and_detects_drift() {
+    let tmp = tempdir().unwrap();
+    let repo = tmp.path();
+    let user = repo.join("user.json");
+
+    aipm(repo, &user).arg("init").assert().success();
+    write_profile_settings(repo, "focus", r#"{"model":"opus"}"#);
+    aipm(repo, &user).args(["use", "focus"]).assert().success();
+
+    aipm(repo, &user)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("focus"))
+        .stdout(predicates::str::contains(".claude/settings.local.json"));
+
+    // delete an owned file out from under the tool -> drift reported
+    fs::remove_file(repo.join(".claude/settings.local.json")).unwrap();
+    aipm(repo, &user)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("missing"));
+}
