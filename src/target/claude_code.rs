@@ -34,6 +34,9 @@ impl Target for ClaudeCodeTarget {
             profile.claude_md.as_deref().unwrap_or("").as_bytes(),
         )?;
 
+        self.drop_tree(ctx, &profile.agents, &ctx.agents_dir(), &mut manifest)?;
+        self.drop_tree(ctx, &profile.skills, &ctx.skills_dir(), &mut manifest)?;
+
         if !profile.mcp_servers.is_empty() {
             let mut cfg = slots::read_json(&ctx.user_config)?;
             let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
@@ -76,6 +79,25 @@ impl Target for ClaudeCodeTarget {
 }
 
 impl ClaudeCodeTarget {
+    fn drop_tree(
+        &self,
+        ctx: &Context,
+        files: &[crate::profile::ProfileFile],
+        dest_root: &Path,
+        manifest: &mut Manifest,
+    ) -> Result<()> {
+        for f in files {
+            let dest = dest_root.join(&f.rel);
+            self.guard_foreign(&dest)?;
+            slots::atomic_write(&dest, &f.contents)?;
+            let rel_path = rel(ctx, &dest);
+            let ignore = rel_path.to_string_lossy().replace('\\', "/");
+            crate::gitignore::ensure_ignored(&ctx.repo_root, &[ignore.as_str()])?;
+            manifest.files.push(rel_path);
+        }
+        Ok(())
+    }
+
     /// A target file present here is foreign (owned files were cleared first).
     /// Protect it unless `force`, in which case back it up to `<name>.bak`.
     fn guard_foreign(&self, path: &Path) -> Result<()> {
@@ -235,5 +257,51 @@ mod tests {
         let p = profile_with_mcp(json!({"db": {"command": "ours"}}));
         let err = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap_err();
         assert!(err.to_string().contains("db"));
+    }
+
+    fn profile_with_agent(rel: &str, body: &str) -> Profile {
+        Profile {
+            name: "focus".into(),
+            settings: None,
+            claude_md: None,
+            mcp_servers: Default::default(),
+            agents: vec![crate::profile::ProfileFile { rel: PathBuf::from(rel), contents: body.as_bytes().to_vec() }],
+            skills: vec![],
+        }
+    }
+
+    #[test]
+    fn project_drops_agent_files_and_gitignores_them() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let p = profile_with_agent("rev.md", "agent body");
+        let m = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap();
+
+        assert_eq!(fs::read_to_string(ctx.agents_dir().join("rev.md")).unwrap(), "agent body");
+        assert!(m.files.contains(&PathBuf::from(".claude/agents/rev.md")));
+        let gi = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+        assert!(gi.contains(".claude/agents/rev.md"));
+    }
+
+    #[test]
+    fn switching_removes_previous_agent_file() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let t = ClaudeCodeTarget::new(false);
+        let m = t.project(&ctx, &profile_with_agent("rev.md", "body")).unwrap();
+        t.clear(&ctx, &m).unwrap();
+        assert!(!ctx.agents_dir().join("rev.md").exists());
+    }
+
+    #[test]
+    fn foreign_agent_file_is_protected() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        fs::create_dir_all(ctx.agents_dir()).unwrap();
+        fs::write(ctx.agents_dir().join("rev.md"), "committed team agent").unwrap();
+        let err = ClaudeCodeTarget::new(false)
+            .project(&ctx, &profile_with_agent("rev.md", "mine"))
+            .unwrap_err();
+        assert!(err.to_string().contains("rev.md"));
     }
 }
