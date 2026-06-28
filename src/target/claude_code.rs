@@ -155,7 +155,7 @@ impl ClaudeCodeTarget {
             self.guard_foreign(&dest)?;
             slots::atomic_write(&dest, &f.contents)?;
             let rel_path = rel(ctx, &dest);
-            let ignore = rel_path.to_string_lossy().replace('\\', "/");
+            let ignore = crate::slots::forward_slashes(&rel_path);
             crate::gitignore::ensure_ignored(&ctx.repo_root, &[ignore.as_str()])?;
             manifest.files.push(rel_path);
         }

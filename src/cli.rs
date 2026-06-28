@@ -177,7 +177,7 @@ fn cmd_status(ctx: &Context) -> Result<()> {
     for rel in &state.manifest.files {
         let present = ctx.repo_root.join(rel).exists();
         let tag = if present { "ok" } else { "missing (drift)" };
-        println!("  {} [{}]", rel.display(), tag);
+        println!("  {} [{}]", crate::slots::forward_slashes(rel), tag);
     }
     if !state.manifest.mcp_servers.is_empty() {
         println!(
