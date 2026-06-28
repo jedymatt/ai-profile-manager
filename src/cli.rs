@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use crate::context::Context;
+use crate::profile::Profile;
 use crate::state::State;
+use crate::target::{ClaudeCodeTarget, Target};
 use crate::{gitignore, slots};
 
 #[derive(Parser)]
@@ -19,6 +21,15 @@ pub enum Command {
     New { name: String },
     /// List profiles (marks the active one)
     List,
+    /// Activate a profile (switching from any current one)
+    Use {
+        name: String,
+        /// Back up and overwrite foreign (hand-made) local slot files
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove the active personal overlay, leaving only committed team config
+    Deactivate,
 }
 
 const IMPORT_LINE: &str = "@.claude/local.md";
@@ -34,6 +45,8 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Init => cmd_init(&ctx),
         Command::New { name } => cmd_new(&ctx, &name),
         Command::List => cmd_list(&ctx),
+        Command::Use { name, force } => cmd_use(&ctx, &name, force),
+        Command::Deactivate => cmd_deactivate(&ctx),
     }
 }
 
@@ -100,5 +113,31 @@ fn cmd_list(ctx: &Context) -> Result<()> {
         let marker = if active.as_deref() == Some(name.as_str()) { "* " } else { "  " };
         println!("{marker}{name}");
     }
+    Ok(())
+}
+
+fn cmd_use(ctx: &Context, name: &str, force: bool) -> Result<()> {
+    let profile = Profile::load(ctx, name)?;
+    let mut state = State::load(ctx)?;
+    let target = ClaudeCodeTarget::new(force);
+
+    target.clear(ctx, &state.manifest)?;       // remove previously projected artifacts (owned only)
+    let manifest = target.project(ctx, &profile)?;  // foreign-protection lives in project()
+
+    state.active = Some(name.to_string());
+    state.manifest = manifest;
+    state.save(ctx)?;
+
+    println!("Activated profile '{name}'.");
+    Ok(())
+}
+
+fn cmd_deactivate(ctx: &Context) -> Result<()> {
+    let mut state = State::load(ctx)?;
+    ClaudeCodeTarget::new(false).clear(ctx, &state.manifest)?;
+    state.active = None;
+    state.manifest = Default::default();
+    state.save(ctx)?;
+    println!("Deactivated. Committed team config is unchanged.");
     Ok(())
 }
