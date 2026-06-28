@@ -34,6 +34,22 @@ impl Target for ClaudeCodeTarget {
             profile.claude_md.as_deref().unwrap_or("").as_bytes(),
         )?;
 
+        if !profile.mcp_servers.is_empty() {
+            let mut cfg = slots::read_json(&ctx.user_config)?;
+            let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
+            for (name, def) in &profile.mcp_servers {
+                if servers.contains_key(name) && !self.force {
+                    return Err(anyhow!(
+                        "MCP server '{}' already exists in {} and is not managed by aipm; rerun with --force to overwrite",
+                        name, ctx.user_config.display()
+                    ));
+                }
+                servers.insert(name.clone(), def.clone());
+                manifest.mcp_servers.push(name.clone());
+            }
+            slots::write_json(&ctx.user_config, &cfg)?;
+        }
+
         Ok(manifest)
     }
 
@@ -44,6 +60,16 @@ impl Target for ClaudeCodeTarget {
         // reset the tool-owned import target instead of deleting it
         if ctx.local_md_path().exists() {
             slots::atomic_write(&ctx.local_md_path(), b"")?;
+        }
+        if !manifest.mcp_servers.is_empty() {
+            let mut cfg = slots::read_json(&ctx.user_config)?;
+            {
+                let servers = mcp_servers_mut(&mut cfg, &ctx.repo_root);
+                for name in &manifest.mcp_servers {
+                    servers.remove(name);
+                }
+            }
+            slots::write_json(&ctx.user_config, &cfg)?;
         }
         Ok(())
     }
@@ -71,6 +97,18 @@ impl ClaudeCodeTarget {
 
 fn rel(ctx: &Context, path: &Path) -> PathBuf {
     path.strip_prefix(&ctx.repo_root).unwrap_or(path).to_path_buf()
+}
+
+fn mcp_servers_mut<'a>(cfg: &'a mut Value, repo_root: &Path) -> &'a mut serde_json::Map<String, Value> {
+    let key = repo_root.to_string_lossy().to_string();
+    cfg.as_object_mut()
+        .unwrap()
+        .entry("projects").or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut().unwrap()
+        .entry(key).or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut().unwrap()
+        .entry("mcpServers").or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut().unwrap()
 }
 
 #[cfg(test)]
@@ -141,5 +179,61 @@ mod tests {
         ClaudeCodeTarget::new(true).project(&ctx, &p).unwrap();
         let bak = ctx.settings_local_path().with_extension("json.bak");
         assert!(bak.exists());
+    }
+
+    fn profile_with_mcp(servers: Value) -> Profile {
+        Profile {
+            name: "focus".into(),
+            settings: None,
+            claude_md: None,
+            mcp_servers: servers.as_object().unwrap().clone(),
+            agents: vec![],
+            skills: vec![],
+        }
+    }
+
+    #[test]
+    fn project_registers_local_scope_mcp_under_project_key() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let p = profile_with_mcp(json!({"db": {"command": "run-db"}}));
+        let m = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap();
+
+        let cfg: Value = serde_json::from_str(&fs::read_to_string(&ctx.user_config).unwrap()).unwrap();
+        let key = ctx.repo_root.to_string_lossy().to_string();
+        assert_eq!(cfg["projects"][&key]["mcpServers"]["db"]["command"], "run-db");
+        assert!(m.mcp_servers.contains(&"db".to_string()));
+    }
+
+    #[test]
+    fn clear_removes_only_owned_mcp_servers() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let key = ctx.repo_root.to_string_lossy().to_string();
+        // pre-existing foreign server the tool must not touch
+        let pre = json!({"projects": {&key: {"mcpServers": {"keep": {"command": "x"}}}}});
+        fs::write(&ctx.user_config, serde_json::to_string(&pre).unwrap()).unwrap();
+
+        let t = ClaudeCodeTarget::new(false);
+        let p = profile_with_mcp(json!({"db": {"command": "run-db"}}));
+        let m = t.project(&ctx, &p).unwrap();
+        t.clear(&ctx, &m).unwrap();
+
+        let cfg: Value = serde_json::from_str(&fs::read_to_string(&ctx.user_config).unwrap()).unwrap();
+        assert!(cfg["projects"][&key]["mcpServers"]["keep"].is_object());
+        assert!(cfg["projects"][&key]["mcpServers"]["db"].is_null());
+    }
+
+    #[test]
+    fn foreign_mcp_name_collision_is_protected() {
+        let tmp = tempdir().unwrap();
+        let ctx = ctx_for(tmp.path());
+        let key = ctx.repo_root.to_string_lossy().to_string();
+        let pre = json!({"projects": {&key: {"mcpServers": {"db": {"command": "theirs"}}}}});
+        fs::write(&ctx.user_config, serde_json::to_string(&pre).unwrap()).unwrap();
+
+        let p = profile_with_mcp(json!({"db": {"command": "ours"}}));
+        let err = ClaudeCodeTarget::new(false).project(&ctx, &p).unwrap_err();
+        assert!(err.to_string().contains("db"));
     }
 }
