@@ -1,0 +1,34 @@
+use assert_cmd::Command;
+use tempfile::tempdir;
+use std::fs;
+
+fn aipm(repo: &std::path::Path, user_config: &std::path::Path) -> Command {
+    let mut c = Command::cargo_bin("aipm").unwrap();
+    c.env("AIPM_REPO_ROOT", repo).env("AIPM_USER_CONFIG", user_config);
+    c
+}
+
+#[test]
+fn init_sets_up_gitignore_import_and_default_profile() {
+    let tmp = tempdir().unwrap();
+    let repo = tmp.path();
+    let user = repo.join("user.json");
+
+    aipm(repo, &user).arg("init").assert().success();
+
+    let gi = fs::read_to_string(repo.join(".gitignore")).unwrap();
+    assert!(gi.contains(".claude-profiles/"));
+    assert!(gi.contains(".claude/settings.local.json"));
+    assert!(gi.contains(".claude/local.md"));
+
+    let claude_md = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
+    assert!(claude_md.contains("@.claude/local.md"));
+
+    assert!(repo.join(".claude-profiles/default").is_dir());
+    assert!(repo.join(".claude/local.md").is_file()); // placeholder so the import never errors
+
+    // idempotent
+    aipm(repo, &user).arg("init").assert().success();
+    let claude_md2 = fs::read_to_string(repo.join("CLAUDE.md")).unwrap();
+    assert_eq!(claude_md2.matches("@.claude/local.md").count(), 1);
+}
