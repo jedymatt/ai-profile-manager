@@ -43,6 +43,13 @@ pub fn remove_if_exists(path: &Path) -> Result<()> {
     }
 }
 
+/// Render a path in canonical forward-slash form so tool output (status
+/// listings, `.gitignore` entries) is identical across platforms. On Windows
+/// `Path::display` emits `\`; we normalize to `/`, which Windows also accepts.
+pub fn forward_slashes(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +78,20 @@ mod tests {
         remove_if_exists(&path).unwrap();
         remove_if_exists(&path).unwrap(); // second call must not error
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn forward_slashes_normalizes_separators() {
+        // Windows-native backslashes render as forward slashes so tool output
+        // (status listings, gitignore entries) is identical across platforms.
+        assert_eq!(
+            forward_slashes(Path::new(".claude\\settings.local.json")),
+            ".claude/settings.local.json"
+        );
+        // A path that is already forward-slash (the Unix-native form) is unchanged.
+        assert_eq!(
+            forward_slashes(Path::new(".claude/agents/rev.md")),
+            ".claude/agents/rev.md"
+        );
     }
 }
